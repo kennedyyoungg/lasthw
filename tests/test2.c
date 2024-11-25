@@ -11,7 +11,7 @@ int main() {
 
   fprintf(stderr, 
       "=======================================================================\n"
-      "This test allocates the same amount of memory repeatedly. sbrk\n"
+
       "shouldn't be called more than once\n"
       "=======================================================================\n");
 

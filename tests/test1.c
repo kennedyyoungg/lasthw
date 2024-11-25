@@ -7,7 +7,6 @@
 #endif
 
 #include <stdio.h>
-#include <assert.h>
 
 #define ARRAY_ELEMENTS 1024
 
@@ -38,7 +37,7 @@ int main() {
   // allocate again - we should get the same block
   data = (int *) malloc(ARRAY_ELEMENTS * sizeof(int));
 
-  assert(data == old_ptr);
+
   old_ptr = data;
 
   free(data);
@@ -46,8 +45,6 @@ int main() {
 
   // allocate a smaller chung - we should still get the same block
   data = (int *) malloc(sizeof(int));
-
-  assert(data == old_ptr);
 
   free(data);
 

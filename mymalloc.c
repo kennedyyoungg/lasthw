@@ -1,135 +1,140 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <stdbool.h>
-#include <assert.h>
+#include <stddef.h>
+#include <debug.h>
 
-#define ALIGNMENT 8
-#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~(ALIGNMENT-1))
-#define MIN_BLOCK_SIZE 24  // Minimum size for a free block
+// Block metadata structure
+typedef struct block {
+    size_t size;          
+    struct block *next;   
+} block_t;
 
-typedef struct block_header {
-    size_t size;            // Size of the block (including header)
-    bool is_free;           // Whether the block is free
-} block_header_t;
+// Global free list pointer
+static block_t *free_list = NULL;
 
-static void* heap_start = NULL;     // Start of our heap
-static void* heap_end = NULL;       // End of our heap
-
-// Helper function to get the header of a block from a pointer to the data
-static block_header_t* get_block_header(void* ptr) {
-    return (block_header_t*)((char*)ptr - sizeof(block_header_t));
+// Helper function to align memory sizes
+static size_t align_size(size_t size) {
+    return (size + sizeof(size_t) - 1) & ~(sizeof(size_t) - 1);
 }
 
-// Helper function to get the data portion of a block from the header
-static void* get_block_data(block_header_t* header) {
-    return (void*)((char*)header + sizeof(block_header_t));
-}
-
-// Helper function to get the next header
-static block_header_t* get_next_header(block_header_t* header) {
-    if ((void*)((char*)header + header->size) >= heap_end) return NULL;
-    return (block_header_t*)((char*)header + header->size);
-}
-
-// Initialize a block with given size
-static void init_block(block_header_t* block, size_t size) {
-    block->size = size;
-    block->is_free = false;
-}
-
-// Helper to find a free block
-static block_header_t* find_free_block(size_t size) {
-    block_header_t* current = heap_start;
-    
-    while (current != NULL && (void*)current < heap_end) {
-        if (current->is_free && current->size >= size) {
-            return current;
-        }
-        current = get_next_header(current);
-    }
-    return NULL;
-}
-
-// Split a block if possible
-static void split_block(block_header_t* block, size_t size) {
-    size_t remaining = block->size - size;
-    if (remaining >= MIN_BLOCK_SIZE) {
-        // Create new block header after the allocation
-        block_header_t* new_block = (block_header_t*)((char*)block + size);
-        init_block(new_block, remaining);
-        new_block->is_free = true;
-        
-        // Update original block
-        block->size = size;
+// Wrapper for mmap to allocate memory
+void *my_mmap(size_t increment) {
+    debug_printf("Calling mmap with increment: %zu\n", increment);
+    void *ptr = sbrk(increment); 
+    if (ptr == (void *)-1) {
+        debug_printf("mmap failed\n");
+        return NULL;
+    } else {
+        debug_printf("mmap succeeded, returned pointer: %p\n", ptr);
+        return ptr;
     }
 }
 
-void* mymalloc(size_t size) {
+// Add a block to the free list, maintaining order and coalescing
+void add_to_free_list(block_t *block) {
+    debug_printf("Adding block at: %p to free list\n", block);
+
+    if (!free_list) {
+        free_list = block;
+        block->next = NULL;
+        return;
+    }
+
+    block_t *prev = NULL;
+    block_t *current = free_list;
+
+    // Find the correct position to insert the block
+    while (current && current < block) {
+        prev = current;
+        current = current->next;
+    }
+
+    // Insert the block into the list
+    block->next = current;
+    if (prev) {
+        prev->next = block;
+    } else {
+        free_list = block;
+    }
+
+    // Coalesce with the next block if adjacent
+    if (current && (void *)block + block->size == (void *)current) {
+        debug_printf("Coalescing with next block at: %p\n", current);
+        block->size += current->size;
+        block->next = current->next;
+    }
+
+    // Coalesce with the previous block if adjacent
+    if (prev && (void *)prev + prev->size == (void *)block) {
+        debug_printf("Coalescing with previous block at: %p\n", prev);
+        prev->size += block->size;
+        prev->next = block->next;
+    }
+}
+
+// Custom malloc implementation
+void *mymalloc(size_t size) {
+    debug_printf("Requested allocation size: %zu\n", size);
+
     if (size == 0) return NULL;
-    
-    // Calculate total size needed including header
-    size_t total_size = ALIGN(sizeof(block_header_t) + size);
-    if (total_size < MIN_BLOCK_SIZE) {
-        total_size = MIN_BLOCK_SIZE;
+
+    // Align the requested size and include space for the block metadata
+    size_t aligned_size = align_size(size);
+    size_t total_size = aligned_size + sizeof(block_t);
+
+    block_t *prev = NULL;
+    block_t *current = free_list;
+
+    while (current) {
+        if (current->size >= total_size) {
+            // Found a suitable block
+            if (prev) {
+                prev->next = current->next;
+            } else {
+                free_list = current->next;
+            }
+            debug_printf("Reusing block at: %p\n", current);
+            return (void *)(current + 1);
+        }
+        prev = current;
+        current = current->next;
     }
-    
-    block_header_t* block;
-    
-    // First allocation
-    if (heap_start == NULL) {
-        // Request initial chunk (4096 bytes or more if needed)
-        size_t chunk_size = (total_size > 4096) ? total_size : 4096;
-        heap_start = sbrk(chunk_size);
-        if (heap_start == (void*)-1) return NULL;
-        
-        heap_end = (char*)heap_start + chunk_size;
-        block = heap_start;
-        init_block(block, chunk_size);
-        block->is_free = true;
+
+    // No suitable block found; allocate more memory
+    block_t *new_block = my_mmap(total_size);
+    if (!new_block) {
+        debug_printf("Memory allocation failed!\n");
+        return NULL;
     }
-    
-    // Try to find a free block
-    block = find_free_block(total_size);
-    if (block) {
-        block->is_free = false;
-        split_block(block, total_size);
-        return get_block_data(block);
-    }
-    
-    // No suitable block found, request more memory
-    block = sbrk(total_size);
-    if (block == (void*)-1) return NULL;
-    
-    init_block(block, total_size);
-    heap_end = (char*)block + total_size;
-    
-    return get_block_data(block);
+
+    new_block->size = total_size;
+    new_block->next = NULL;
+
+    debug_printf("Allocated block at: %p\n", new_block);
+    return (void *)(new_block + 1);
 }
 
-void* mycalloc(size_t nmemb, size_t size) {
-    size_t total_size = nmemb * size;
-    
-    // Check for overflow
-    if (size != 0 && total_size / size != nmemb) return NULL;
-    
-    void* ptr = mymalloc(total_size);
+// Custom free implementation and adds the block back to the free list with coalescing
+void myfree(void *ptr) {
+    if (!ptr) {
+        debug_printf("Freeing NULL pointer\n");
+        return;
+    }
+
+    block_t *block = (block_t *)ptr - 1; // Retrieve block metadata
+    debug_printf("Freeing pointer at: %p\n", ptr);
+
+    add_to_free_list(block); 
+}
+
+// Custom calloc implementation
+void *mycalloc(size_t num, size_t size) {
+    size_t total_size = num * size;
+    void *ptr = mymalloc(total_size);
     if (ptr) {
-        memset(ptr, 0, total_size);
+        memset(ptr, 0, total_size); 
     }
     return ptr;
-}
-
-void myfree(void* ptr) {
-    if (!ptr) return;
-    
-    block_header_t* block = get_block_header(ptr);
-    assert((void*)block >= heap_start && (void*)block < heap_end);
-    
-    block->is_free = true;
-    
-    // Coalesce with next block if it's free
-    block_header_t* next = get_next_header(block);
-    if (next && next->is_free) {
-        block->size += next->size;
-    }
 }

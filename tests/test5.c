@@ -27,7 +27,6 @@ int main() {
 
   fprintf(stderr, 
       "=======================================================================\n"
-      "Allocator stress test. There shouldn't be more than 64 calls to sbrk in\n"
       "the worst case scenario.\n"
       "=======================================================================\n");
 

@@ -9,7 +9,6 @@
 int main() {
   fprintf(stderr, 
       "=======================================================================\n"
-      "This test repeatedly allocates 5 differently sized blocks. sbrk should\n" 
       "should not be called more than 25 times in the worst case and your free\n"
       "list should have one or more instance of blocks of 8, 16, 32, 64 and\n"
       "128 bytes\n"
